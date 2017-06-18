@@ -49,7 +49,7 @@ loader.loadLevel = function () {
     {
         var begin = (loader.currentlyLoaded == 0) ? 0 : model.levels[loader.currentlyLoaded-1];
         var end = model.levels[loader.currentlyLoaded];
-        var byteCount = 8;
+        var byteCount = 12;
 
         loader.loadBinary(
             loader.path+model.data,
@@ -57,6 +57,7 @@ loader.loadLevel = function () {
                 // Does the answer contain only the requested range of bytes?
                 if(arrayBuffer.byteLength == (end-begin)*byteCount)
                 {
+                	//console.log( " ONLY REQ RANGE BYTES: " +arrayBuffer.byteLength );
                     loader.currentlyLoaded++;
 
                     // Add this data to the data to display...
@@ -70,6 +71,7 @@ loader.loadLevel = function () {
                     loader.currentlyLoaded = model.levelCount;
                     // Set all the data at once and finish loading
                     drawer.setData(new Uint16Array(arrayBuffer), false, -1);
+                	//console.log( " SET ALL AT ONCE: " +arrayBuffer.byteLength );
                 }
             },
             true,
@@ -99,6 +101,7 @@ loader.loadBinary = (function(url, onload, partial, begin, end, byteCount) {
     {
         begin = begin * byteCount;
         end = (end * byteCount)-1;
+    	//console.log( " PARTIAL BEGIN : " +begin+ " END : " +end );
 
         // Set partial load header
         oReq.setRequestHeader("Range","bytes="+begin+"-"+end)
@@ -111,6 +114,7 @@ loader.loadBinary = (function(url, onload, partial, begin, end, byteCount) {
 		// extract data...
  		var arrayBuffer = this.response;
         
+        //console.log( "RESPONSE : " +arrayBuffer );
  		// ...and process it
  		onload(arrayBuffer);
  	};

@@ -110,15 +110,15 @@ Drawer.prototype.init = function(model) {
     );
 
     // create and bind array to hold the interleaved data
-    this.interleavedArray = new Uint16Array(4 * model.numVertices);
-    this.interleavedBuffer = this.initBuffer(4, model.numVertices);
+    this.interleavedArray = new Uint16Array(6 * model.numVertices);
+    this.interleavedBuffer = this.initBuffer(6, model.numVertices);
 
     // zoom factors to make sure the model fits into the canvas exactly
     var w = Math.max(model.xmax-model.xmin, model.ymax-model.ymin);
     this.largeness = Math.max(w, model.zmax-model.zmin);
     var d = (w/2) / Math.tan(degToRad(this.alpha/2)) + (model.zmax-model.zmin)/2 + 0.5*w;
-	this.initialZ = -d;
-    this.currentZ = -d;
+	this.initialZ = -d / 2;
+    this.currentZ = -d / 2;
     
     // adapt clipping planes to model size
     this.clipping.near = 0.1 * this.largeness;
@@ -171,6 +171,9 @@ Drawer.prototype.initShaders = function(vs, fs) {
     
     this.shaderProgram.vertexNormalAttribute = gl.getAttribLocation(this.shaderProgram, "aVertexNormal");
     gl.enableVertexAttribArray(this.shaderProgram.vertexNormalAttribute);
+
+    this.shaderProgram.vertexColorAttribute = gl.getAttribLocation(this.shaderProgram, "aVertexColor");
+    gl.enableVertexAttribArray(this.shaderProgram.vertexColorAttribute);
 
     //Set matrices
     this.shaderProgram.pMatrixUniform = gl.getUniformLocation(this.shaderProgram, "uPMatrix");
@@ -404,8 +407,9 @@ Drawer.prototype.setData = function(interleavedData, partial, level) {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.interleavedBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, this.interleavedArray, gl.STATIC_DRAW);
 
-    gl.vertexAttribPointer(this.shaderProgram.vertexPositionAttribute, 3, gl.UNSIGNED_SHORT, false, 8, 0);
-    gl.vertexAttribPointer(this.shaderProgram.vertexNormalAttribute, 2, gl.UNSIGNED_BYTE, false, 8, 6);
+    gl.vertexAttribPointer(this.shaderProgram.vertexPositionAttribute, 3, gl.UNSIGNED_SHORT, false, 12, 0);
+    gl.vertexAttribPointer(this.shaderProgram.vertexNormalAttribute, 2, gl.UNSIGNED_BYTE, false, 12, 6);
+    gl.vertexAttribPointer(this.shaderProgram.vertexColorAttribute, 4, gl.UNSIGNED_BYTE, false, 12, 8);
 
     // At least one chunk of data is loaded, thus the app can start drawing
     this.ready = true;
