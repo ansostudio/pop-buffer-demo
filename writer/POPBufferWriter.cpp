@@ -1,8 +1,27 @@
 // POPBufferWriter.cpp : Defines the entry point for the console application.
 //
 
-#include "stdafx.h"
+#include <thread>
+#include <chrono>
+#include <vector>
+#include <sstream>
 #include <iostream>
+
+#include "tinyply.h"
+using namespace tinyply;
+
+typedef std::chrono::time_point<std::chrono::high_resolution_clock> timepoint;
+std::chrono::high_resolution_clock c;
+
+inline std::chrono::time_point<std::chrono::high_resolution_clock> now()
+{
+	return c.now();
+}
+
+inline double difference_micros(timepoint start, timepoint end)
+{
+	return (double)std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+}
 
 #define TINYOBJLOADER_IMPLEMENTATION // define this in only *one* .cc
 #include "tiny_obj_loader.h"
@@ -12,11 +31,15 @@ using namespace std;
 
 static const unsigned int maxLevel = 16;
 static std::vector<unsigned short> PRECOMPUTED_MASKS;
-
-const string inputfile = "models/bunny.obj";
-const string modelName = "bunny";
-const char* dataFileName = "bunny.pop";
-const char* metaFileName = "bunny.json";
+//#define LOAD_OBJ
+#if defined( LOAD_OBJ )
+const string inputfile = "pdj_2000000.obj";
+#else 
+const string inputfile = "pdj_2000000.ply";
+#endif
+const string modelName = "pdj_2000000";
+const char* dataFileName = "pdj_2000000.pop";
+const char* metaFileName = "pdj_2000000.json";
 
 /*
 	Structure to hold a record that should be written to file
@@ -25,12 +48,13 @@ struct rec
 {
 	unsigned short x, y, z;
 	unsigned char u, v;
+	unsigned char r, g, b, a;
 };
 
 /*
 	Structure to hold min and max values for transformation
 */
-struct minmax
+struct minMax
 {
 	float minx, miny, minz, minu, minv;
 	float maxx, maxy, maxz, maxu, maxv;
@@ -44,6 +68,7 @@ struct entry
 	float vx, vy, vz;
 	float nx, ny, nz;
 	float nu, nv;
+	float vr, vg, vb, va;
 };
 
 /*
@@ -106,6 +131,19 @@ bool is_degenerated(rec r0, rec r1, rec r2, int level)
 */
 int main()
 {
+	// Init min and max values
+	minMax minMaxValues;
+	minMaxValues.minx = HUGE_VALF;
+	minMaxValues.maxx = -HUGE_VALF;
+	minMaxValues.miny = HUGE_VALF;
+	minMaxValues.maxy = -HUGE_VALF;
+	minMaxValues.minz = HUGE_VALF;
+	minMaxValues.maxz = -HUGE_VALF;
+
+	// Create a vector to hold the entries
+	std::vector<entry> entries;
+
+
 	/*
 		-----------------------------------------------------------------------------------------------------------------------
 		Parse obj file
@@ -113,6 +151,7 @@ int main()
 	*/
 	cout << "Reading file " << inputfile << endl;
 
+#if defined( LOAD_OBJ )
 	tinyobj::attrib_t attrib;
 	std::vector<tinyobj::shape_t> shapes;
 	std::vector<tinyobj::material_t> materials;
@@ -126,24 +165,10 @@ int main()
 		exit(1);
 	}
 
-
-	// Create a vector to hold the entries
-	std::vector<entry> entries;
 	int vertexCount = shapes[0].mesh.num_face_vertices.size() * 3;
 	std::cout << "Found " << vertexCount << " vertices in file " << inputfile << std::endl;
 	entries.reserve(vertexCount);
 	int counter = 0;
-
-
-	// Init min and max values
-	minmax minMaxValues;
-	minMaxValues.minx = HUGE_VALF;
-	minMaxValues.maxx = -HUGE_VALF;
-	minMaxValues.miny = HUGE_VALF;
-	minMaxValues.maxy = -HUGE_VALF;
-	minMaxValues.minz = HUGE_VALF;
-	minMaxValues.maxz = -HUGE_VALF;
-
 
 
 	/*
@@ -152,9 +177,9 @@ int main()
 		-----------------------------------------------------------------------------------------------------------------------
 	*/
 	size_t index_offset = 0;
+	std::cout << " FACES : " << shapes[0].mesh.num_face_vertices.size() << std::endl;
 	for (size_t f = 0; f < shapes[0].mesh.num_face_vertices.size(); f++) {
 		size_t fv = shapes[0].mesh.num_face_vertices[f];
-
 		// Loop over vertices in the face.
 		for (size_t v = 0; v < fv; v++) {
 			// access to vertex
@@ -185,6 +210,121 @@ int main()
 		}
 		index_offset += fv;
 	}
+#else // LOAD_PLY
+
+// Tinyply can and will throw exceptions at you!
+	try
+	{
+		// Read the file and create a std::istringstream suitable
+		// for the lib -- tinyply does not perform any file i/o.
+		std::ifstream ss(inputfile, std::ios::binary);
+
+		// Parse the ASCII header fields
+		PlyFile file(ss);
+
+		for (auto e : file.get_elements())
+		{
+			std::cout << "element - " << e.name << " (" << e.size << ")" << std::endl;
+			for (auto p : e.properties)
+			{
+				std::cout << "\tproperty - " << p.name << " (" << PropertyTable[p.propertyType].str << ")" << std::endl;
+			}
+		}
+		std::cout << std::endl;
+
+		for (auto c : file.comments)
+		{
+			std::cout << "Comment: " << c << std::endl;
+		}
+
+		// Define containers to hold the extracted data. The type must match
+		// the property type given in the header. Tinyply will interally allocate the
+		// the appropriate amount of memory.
+		std::vector<float> verts;
+		std::vector<float> norms;
+		std::vector<uint8_t> colors;
+
+		std::vector<uint32_t> faces;
+		std::vector<float> uvCoords;
+
+		uint32_t vertexCount, normalCount, colorCount, faceCount, faceTexcoordCount, faceColorCount;
+		vertexCount = normalCount = colorCount = faceCount = faceTexcoordCount = faceColorCount = 0;
+
+		// The count returns the number of instances of the property group. The vectors
+		// above will be resized into a multiple of the property group size as
+		// they are "flattened"... i.e. verts = {x, y, z, x, y, z, ...}
+		vertexCount = file.request_properties_from_element("vertex", { "x", "y", "z" }, verts);
+		normalCount = file.request_properties_from_element("vertex", { "nx", "ny", "nz" }, norms);
+		colorCount = file.request_properties_from_element("vertex", { "red", "green", "blue", "alpha" }, colors);
+
+		// For properties that are list types, it is possibly to specify the expected count (ideal if a
+		// consumer of this library knows the layout of their format a-priori). Otherwise, tinyply
+		// defers allocation of memory until the first instance of the property has been found
+		// as implemented in file.read(ss)
+		faceCount = file.request_properties_from_element("face", { "vertex_indices" }, faces, 3);
+		faceTexcoordCount = file.request_properties_from_element("face", { "texcoord" }, uvCoords, 6);
+
+		// Now populate the vectors...
+		timepoint before = now();
+		file.read(ss);
+		timepoint after = now();
+
+		// Good place to put a breakpoint!
+		std::cout << "Parsing took " << difference_micros(before, after) << "μs: " << std::endl;
+		std::cout << "\tRead " << verts.size() << " total vertices (" << vertexCount << " properties)." << std::endl;
+		std::cout << "\tRead " << norms.size() << " total normals (" << normalCount << " properties)." << std::endl;
+		std::cout << "\tRead " << colors.size() << " total vertex colors (" << colorCount << " properties)." << std::endl;
+		std::cout << "\tRead " << faces.size() << " total faces (triangles) (" << faceCount << " properties)." << std::endl;
+		std::cout << "\tRead " << uvCoords.size() << " total texcoords (" << faceTexcoordCount << " properties)." << std::endl;
+
+		size_t index_offset = 0;
+		std::cout << " FACES : " << faceCount << std::endl;
+		for (size_t f = 0; f < faceCount; f++) {
+			// Loop over vertices in the face.
+			for (size_t v = 0; v < 3; v++) {
+				// access to vertex
+				uint32_t idx = faces[index_offset + v];
+
+				// create an entry per vertex and update the min and max values if necessary
+				entry e;
+				e.vx = verts[3 * idx + 0];
+				//std::cout << " VX:  " << e.vx ; 
+				if (e.vx < minMaxValues.minx) minMaxValues.minx = e.vx;
+				if (e.vx > minMaxValues.maxx) minMaxValues.maxx = e.vx;
+
+				e.vy = verts[3 * idx + 1];
+				//std::cout << " VY " << e.vy; 
+				if (e.vy < minMaxValues.miny) minMaxValues.miny = e.vy;
+				if (e.vy > minMaxValues.maxy) minMaxValues.maxy = e.vy;
+
+				e.vz = verts[3 * idx + 2];
+				//std::cout << " VZ " << e.vz << std::endl;
+				if (e.vz < minMaxValues.minz) minMaxValues.minz = e.vz;
+				if (e.vz > minMaxValues.maxz) minMaxValues.maxz = e.vz;
+
+				// convert normals to octahedron normals
+				e.nx = norms[3 * idx + 0];
+				e.ny = norms[3 * idx + 1];
+				e.nz = norms[3 * idx + 2];
+				//std::cout << " NX:  " << e.nx << " NY " << e.ny << " NZ " << e.nz << std::endl;
+				encodeOctahedronNormal(e.nx, e.ny, e.nz, e.nu, e.nv);
+
+				e.vr = colors[4 * idx + 0];
+				e.vg = colors[4 * idx + 1];
+				e.vb = colors[4 * idx + 2];
+				e.va = colors[4 * idx + 3];
+				//std::cout << " R:  " << e.vr << " G " << e.vg << " B " << e.vb << " A " << e.va << std::endl;
+
+				entries.push_back(e);
+			}
+			index_offset += 3;
+		}
+	}
+	catch (const std::exception & e)
+	{
+		std::cerr << "Caught exception: " << e.what() << std::endl;
+	}
+#endif
 
 
 	// Output some debugging values
@@ -214,7 +354,7 @@ int main()
 	
 	// Create records for each entry (normalized to range of unsigned short)
 	// and store them in the correct bucket
-	for (int i = 0;i < counter; i+= 3)
+	for (int i = 0;i < entries.size(); i+= 3)
 	{
 		rec triangle[3]; 
 
@@ -228,6 +368,12 @@ int main()
 			triangle[k].z = floor((e.vz - minMaxValues.minz) / (minMaxValues.maxz - minMaxValues.minz) * USHRT_MAX);
 			triangle[k].u = floor(e.nu * UCHAR_MAX);
 			triangle[k].v = floor(e.nv * UCHAR_MAX);
+			triangle[k].r = floor(e.vr  );
+			triangle[k].g = floor(e.vg  );
+			triangle[k].b = floor(e.vb  );
+			triangle[k].a = floor(e.va  );
+			//std::cout << " TRIA R : " << (float)triangle[k].r << " G " << triangle[k].g << " B " << triangle[k].b << std::endl;
+
 		}
 
 
@@ -264,7 +410,7 @@ int main()
 	metaFile << "{\n";
 	metaFile << "\"name\": \"" << modelName << "\",\n";
 	metaFile << "\"data\": \"" << dataFileName << "\",\n";
-	metaFile << "\"numVertices\": \"" << counter << "\",\n";
+	metaFile << "\"numVertices\": \"" << entries.size() << "\",\n";
 	metaFile << "\"xmin\": " << minMaxValues.minx << ",\n";
 	metaFile << "\"ymin\": " << minMaxValues.miny << ",\n";
 	metaFile << "\"zmin\": " << minMaxValues.minz << ",\n";
@@ -293,7 +439,7 @@ int main()
 	// Prepare output file
 	FILE *f;
 	struct rec r;
-	fopen_s(&f, dataFileName, "wb");
+	f = fopen(dataFileName, "wr");
 	if (!f)
 		return 1;
 
@@ -310,7 +456,8 @@ int main()
 		}
 	}
 
-
-	std::cout << "Exported " << counter << " vertices" << std::endl;
+	
+	std::cout << "Exported " << entries.size() << std::endl;
+	printf("sizeof(rec) == %d", (int)sizeof( struct rec ));
 	fclose(f);
 }
